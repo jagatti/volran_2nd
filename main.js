@@ -1,6 +1,6 @@
 import { SONGS } from './songs.js';
-import { fetchTopScores, submitScore, renderRankingTable, escapeHtml_, MAX_NAME_LENGTH, checkNameExists,
-         submitScoreV2, fetchTopScoresV2, checkNameExistsV2, IS_TEST_ENV } from './ranking.js';
+import { renderRankingTable, escapeHtml_, MAX_NAME_LENGTH,
+         submitScoreV2, fetchTopScoresV2, checkNameExistsV2 } from './ranking.js';
 
 let selectedSongIdx = 0;
 let songSelectCardBounds = [];
@@ -1846,18 +1846,10 @@ function update(dt){
       localStorage.setItem('bestScore_' + currentSong.id, bestScore);
       const playerName = localStorage.getItem('player_name');
       if (playerName) {
-        let toastShown = false;
-        const showToastOnce = () => { if (!toastShown) { toastShown = true; showBestScoreToast(); } };
-        // V2には常に送信（本番・テスト共通）
+        // V2のみ送信（V1本番スプレッドには一切送らない）
         submitScoreV2(playerId, playerName, score, lastGameSeed, currentSong.id)
-          .then(res2 => { if (res2.ok) showToastOnce(); else console.warn('V2スコア送信失敗:', res2.error); })
+          .then(res2 => { if (res2.ok) showBestScoreToast(); else console.warn('V2スコア送信失敗:', res2.error); })
           .catch(e => { console.warn('V2スコア送信エラー:', e); });
-        // V1は本番のみ（localhostからのテストデータが入らないよう）
-        if (!IS_TEST_ENV) {
-          submitScore(playerName, score, lastGameSeed, currentSong.id)
-            .then(res => { if (res.ok) showToastOnce(); else console.warn('V1スコア送信失敗:', res.error); })
-            .catch(e => { console.warn('V1スコア送信エラー:', e); });
-        }
       }
     }
   }
