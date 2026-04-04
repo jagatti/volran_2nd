@@ -528,7 +528,6 @@ if (!settingsModal) {
 
 settingsBtn.onclick = () => {
   const currentPlayerName = localStorage.getItem('player_name') || '';
-  const transferCode = playerId.replace(/-/g, '').slice(0, 8).toUpperCase();
   let nameChangeHtml = '';
   if (currentPlayerName) {
     nameChangeHtml = `
@@ -536,10 +535,6 @@ settingsBtn.onclick = () => {
         <span style="font-size:13px;font-weight:700;">👤 プレイヤー名の変更</span>
         <input id="settingsNameInput" type="text" maxlength="10" value="${escapeHtml_(currentPlayerName)}"
           style="width:100%;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:#0f172a;color:#fff;font-size:16px;box-sizing:border-box;">
-        <div style="font-size:11px;color:rgba(255,255,255,0.55);margin-top:4px;">
-          🔑 引き継ぎコード: <span style="font-family:monospace;letter-spacing:0.1em;">${transferCode}</span><br>
-          <span style="font-size:10px;">（再インストール時にデータを復元できます）</span>
-        </div>
         <span id="settingsNameError" style="font-size:12px;color:#f87171;display:none;min-height:16px;">既に使用されています。</span>
         <div style="display:flex;align-items:center;gap:8px;">
           <button id="settingsNameSaveBtn"
@@ -548,10 +543,26 @@ settingsBtn.onclick = () => {
         </div>
       </div>`;
   }
+  const transferSection = `
+    <div style="display:flex;flex-direction:column;gap:6px;border-top:1px solid rgba(255,255,255,0.15);padding-top:12px;margin-top:4px;">
+      <span style="font-size:13px;font-weight:700;">🔑 引き継ぎコード</span>
+      <div style="font-size:11px;color:rgba(255,255,255,0.6);word-break:break-all;font-family:monospace;letter-spacing:0.05em;">${escapeHtml_(playerId)}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.45);">上のコードをメモしておくと、別の端末や再インストール時にデータを復元できます</div>
+      <input id="settingsRestoreInput" type="text" placeholder="他の端末のコードをここに貼り付け"
+        style="width:100%;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:#0f172a;color:#fff;font-size:11px;box-sizing:border-box;font-family:monospace;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button id="settingsRestoreBtn"
+          style="padding:6px 14px;background:#0f766e;color:#fff;border:none;border-radius:7px;cursor:pointer;font-size:12px;">この端末に復元</button>
+        <span id="settingsRestoreMsg" style="font-size:11px;color:#86efac;display:none;">復元しました。再読み込みします…</span>
+        <span id="settingsRestoreError" style="font-size:11px;color:#f87171;display:none;">コードが無効です</span>
+      </div>
+    </div>`;
   const settingsBody = settingsModal.querySelector('div[style*="flex-direction:column;gap:12px"]');
   if (settingsBody) {
     const existing = settingsModal.querySelector('#settingsNameSection');
     if (existing) existing.remove();
+    const existingTransfer = settingsModal.querySelector('#settingsTransferSection');
+    if (existingTransfer) existingTransfer.remove();
     if (currentPlayerName) {
       const section = document.createElement('div');
       section.id = 'settingsNameSection';
@@ -585,6 +596,28 @@ settingsBtn.onclick = () => {
         setTimeout(() => { nameMsg.style.display = 'none'; }, 1000);
       };
     }
+    const transferEl = document.createElement('div');
+    transferEl.id = 'settingsTransferSection';
+    transferEl.innerHTML = transferSection;
+    settingsBody.appendChild(transferEl);
+    const restoreBtn = transferEl.querySelector('#settingsRestoreBtn');
+    const restoreInput = transferEl.querySelector('#settingsRestoreInput');
+    const restoreMsg = transferEl.querySelector('#settingsRestoreMsg');
+    const restoreError = transferEl.querySelector('#settingsRestoreError');
+    restoreBtn.onclick = () => {
+      const code = restoreInput.value.trim();
+      const cleaned = code.replace(/-/g, '').toLowerCase();
+      restoreError.style.display = 'none';
+      restoreMsg.style.display = 'none';
+      if (!/^[0-9a-f]{32}$/.test(cleaned)) {
+        restoreError.style.display = 'inline';
+        return;
+      }
+      const restored = `${cleaned.slice(0,8)}-${cleaned.slice(8,12)}-${cleaned.slice(12,16)}-${cleaned.slice(16,20)}-${cleaned.slice(20)}`;
+      restoreMsg.style.display = 'inline';
+      localStorage.setItem('player_id', restored);
+      setTimeout(() => { location.reload(); }, 1500);
+    };
   }
   settingsModal.style.display = 'block';
 };
@@ -1813,18 +1846,17 @@ function update(dt){
       localStorage.setItem('bestScore_' + currentSong.id, bestScore);
       const playerName = localStorage.getItem('player_name');
       if (playerName) {
-        if (IS_TEST_ENV) {
-          // テスト環境（localhost）: V2のみ送信（本番V1ランキングを汚染しない）
-          submitScoreV2(playerId, playerName, score, lastGameSeed, currentSong.id).then(res2 => {
-            if (!res2.ok) { console.warn('V2スコア送信失敗:', res2.error); return; }
-            showBestScoreToast();
-          }).catch(e => { console.warn('V2スコア送信エラー:', e); });
-        } else {
-          // 本番環境: V1のみ送信
-          submitScore(playerName, score, lastGameSeed, currentSong.id).then(res => {
-            if (!res.ok) { console.warn('スコア送信失敗:', res.error); return; }
-            showBestScoreToast();
-          }).catch(e => { console.warn('スコア送信エラー:', e); });
+        let toastShown = false;
+        const showToastOnce = () => { if (!toastShown) { toastShown = true; showBestScoreToast(); } };
+        // V2には常に送信（本番・テスト共通）
+        submitScoreV2(playerId, playerName, score, lastGameSeed, currentSong.id)
+          .then(res2 => { if (res2.ok) showToastOnce(); else console.warn('V2スコア送信失敗:', res2.error); })
+          .catch(e => { console.warn('V2スコア送信エラー:', e); });
+        // V1は本番のみ（localhostからのテストデータが入らないよう）
+        if (!IS_TEST_ENV) {
+          submitScore(playerName, score, lastGameSeed, currentSong.id)
+            .then(res => { if (res.ok) showToastOnce(); else console.warn('V1スコア送信失敗:', res.error); })
+            .catch(e => { console.warn('V1スコア送信エラー:', e); });
         }
       }
     }
