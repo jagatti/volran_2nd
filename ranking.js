@@ -6,6 +6,9 @@ const GAS_ENDPOINT = "https://script.google.com/macros/s/AKfycbz2gsX2XXdV0OOvHtP
 // 新しいランキング用エンドポイント（UUIDベース・別スプレッドシート）
 const GAS_ENDPOINT_V2 = "REPLACE_WITH_NEW_GAS_ENDPOINT";
 
+// テスト環境判定（localhost で動作中のときは true）
+export const IS_TEST_ENV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+
 // --- HMAC秘密鍵---
 const HMAC_SECRET = "volran-ranking-secret-2025";
 

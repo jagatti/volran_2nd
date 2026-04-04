@@ -1,6 +1,6 @@
 import { SONGS } from './songs.js';
 import { fetchTopScores, submitScore, renderRankingTable, escapeHtml_, MAX_NAME_LENGTH, checkNameExists,
-         submitScoreV2, fetchTopScoresV2, checkNameExistsV2 } from './ranking.js';
+         submitScoreV2, fetchTopScoresV2, checkNameExistsV2, IS_TEST_ENV } from './ranking.js';
 
 let selectedSongIdx = 0;
 let songSelectCardBounds = [];
@@ -78,6 +78,13 @@ if (!playerId) {
 }
 // 1-10 スケールからフレーム数(30-90)に変換: 速度1→90フレーム(遅い)、速度10→30フレーム(速い)
 function speedToFrames(speed) { return Math.round(90 - (speed - 1) * (60 / 9)); }
+function showBestScoreToast() {
+  const toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;left:20px;bottom:24px;z-index:9999;background:rgba(99,102,241,0.92);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:bold;box-shadow:0 4px 16px rgba(0,0,0,0.5);pointer-events:none;';
+  toast.textContent = '🏆 ベストスコアを更新！ランキングに送信しました';
+  document.body.appendChild(toast);
+  setTimeout(() => { toast.remove(); }, 2500);
+}
 
 // --- BGM 音量制御（Web Audio API GainNode、iOS Safari 対応） ---
 // GainNode 変数は loadTapSE() 内で接続される
@@ -1806,17 +1813,19 @@ function update(dt){
       localStorage.setItem('bestScore_' + currentSong.id, bestScore);
       const playerName = localStorage.getItem('player_name');
       if (playerName) {
-        submitScore(playerName, score, lastGameSeed, currentSong.id).then(res => {
-          if (!res.ok) { console.warn('スコア送信失敗:', res.error); return; }
-          const toast = document.createElement('div');
-          toast.style.cssText = 'position:fixed;left:20px;bottom:24px;z-index:9999;background:rgba(99,102,241,0.92);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:bold;box-shadow:0 4px 16px rgba(0,0,0,0.5);pointer-events:none;';
-          toast.textContent = '🏆 ベストスコアを更新！ランキングに送信しました';
-          document.body.appendChild(toast);
-          setTimeout(() => { toast.remove(); }, 2500);
-        }).catch(e => { console.warn('スコア送信エラー:', e); });
-        submitScoreV2(playerId, playerName, score, lastGameSeed, currentSong.id).then(res2 => {
-          if (!res2.ok) console.warn('V2スコア送信失敗:', res2.error);
-        }).catch(e => { console.warn('V2スコア送信エラー:', e); });
+        if (IS_TEST_ENV) {
+          // テスト環境（localhost）: V2のみ送信（本番V1ランキングを汚染しない）
+          submitScoreV2(playerId, playerName, score, lastGameSeed, currentSong.id).then(res2 => {
+            if (!res2.ok) { console.warn('V2スコア送信失敗:', res2.error); return; }
+            showBestScoreToast();
+          }).catch(e => { console.warn('V2スコア送信エラー:', e); });
+        } else {
+          // 本番環境: V1のみ送信
+          submitScore(playerName, score, lastGameSeed, currentSong.id).then(res => {
+            if (!res.ok) { console.warn('スコア送信失敗:', res.error); return; }
+            showBestScoreToast();
+          }).catch(e => { console.warn('スコア送信エラー:', e); });
+        }
       }
     }
   }
