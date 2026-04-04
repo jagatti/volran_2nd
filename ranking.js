@@ -3,6 +3,9 @@ import { SONGS } from './songs.js';
 // --- GASエンドポイント ---
 const GAS_ENDPOINT = "https://script.google.com/macros/s/AKfycbz2gsX2XXdV0OOvHtPF0AsHkTBvrCQ_8_1zYxVQ0bki_CoAlFy25QbsEryqTe-dZJJu/exec";
 
+// 新しいランキング用エンドポイント（UUIDベース・別スプレッドシート）
+const GAS_ENDPOINT_V2 = "REPLACE_WITH_NEW_GAS_ENDPOINT";
+
 // --- HMAC秘密鍵---
 const HMAC_SECRET = "volran-ranking-secret-2025";
 
@@ -160,6 +163,83 @@ export async function submitScore(name, score, seed, songId) {
     `&ua=${encodeURIComponent(navigator.userAgent)}` +
     `&sig=${encodeURIComponent(sig)}`;
   return await jsonp(url);
+}
+
+// --- スコア送信（V2・UUIDベース） ---
+export async function submitScoreV2(playerId, name, score, seed, songId) {
+  const trimmedName = String(name ?? '').trim().slice(0, MAX_NAME_LENGTH);
+  if (!trimmedName) throw new Error('名前が無効です');
+  const scoreInt = Math.trunc(Number(score));
+  if (!Number.isFinite(scoreInt) || scoreInt < 0 || scoreInt > 66_666_666) {
+    throw new Error('スコアが無効です');
+  }
+  const song = SONGS.find(s => s.id === songId);
+  if (song) {
+    const maxTap = song.notesChart.length * 50000;
+    const maxAC  = song.acList.reduce((sum, ac) => sum + (ac.rewardScore || 0), 0);
+    const maxSP  = 250000 * 20;
+    const theoreticalMax = (maxTap + maxAC + maxSP) * 2;
+    if (scoreInt > theoreticalMax) throw new Error('スコアが無効です');
+  }
+  const message = `${playerId}|${trimmedName}|${scoreInt}|${seed}|${songId}`;
+  const sig = await computeHmac(message, HMAC_SECRET);
+  const url =
+    `${GAS_ENDPOINT_V2}?action=submit` +
+    `&playerId=${encodeURIComponent(playerId)}` +
+    `&name=${encodeURIComponent(trimmedName)}` +
+    `&score=${encodeURIComponent(scoreInt)}` +
+    `&seed=${encodeURIComponent(seed)}` +
+    `&songId=${encodeURIComponent(songId)}` +
+    `&ua=${encodeURIComponent(navigator.userAgent)}` +
+    `&sig=${encodeURIComponent(sig)}`;
+  return await jsonp(url);
+}
+
+// --- ランキング取得（V2・UUIDベース） ---
+export async function fetchTopScoresV2(limit) {
+  const url = `${GAS_ENDPOINT_V2}?action=top`;
+  const res = await jsonp(url);
+  if (res && res.ok && Array.isArray(res.data)) {
+    const songIds = SONGS.map(s => s.id);
+    const numSongs = SONGS.length;
+    const playerMap = {};
+    for (const r of res.data) {
+      const pid    = String(r.playerId ?? '');
+      const rName  = String(r.name ?? '');
+      const rSong  = String(r.songId ?? '');
+      const rScore = Number(r.score ?? 0);
+      if (!pid) continue;
+      if (!playerMap[pid]) playerMap[pid] = { name: rName, songScores: {} };
+      playerMap[pid].name = rName; // 最新の名前を採用
+      if (songIds.includes(rSong)) {
+        if (!playerMap[pid].songScores[rSong] || rScore > playerMap[pid].songScores[rSong]) {
+          playerMap[pid].songScores[rSong] = rScore;
+        }
+      }
+    }
+    const aggregated = Object.entries(playerMap).map(([, { name, songScores }]) => {
+      const total = songIds.reduce((sum, id) => sum + (songScores[id] || 0), 0);
+      return { name, score: Math.floor(total / numSongs) };
+    });
+    aggregated.sort((a, b) => b.score - a.score);
+    const limited = (typeof limit === 'number') ? aggregated.slice(0, limit) : aggregated;
+    res.data = limited.map((r, i) => ({ ...r, rank: i + 1 }));
+  }
+  return res;
+}
+
+// --- 名前の重複チェック（V2・自分のplayerIdは重複扱いしない） ---
+export async function checkNameExistsV2(name, myPlayerId) {
+  const trimmed = String(name ?? '').trim().toLowerCase();
+  if (!trimmed) return false;
+  const res = await jsonp(`${GAS_ENDPOINT_V2}?action=top`);
+  if (!res || !res.ok || !Array.isArray(res.data)) return false;
+  for (const r of res.data) {
+    const pid   = String(r.playerId ?? '');
+    const rName = String(r.name ?? '').trim().toLowerCase();
+    if (rName === trimmed && pid !== myPlayerId) return true;
+  }
+  return false;
 }
 
 // --- ランキングテーブル描画（rankingModal: ランキングモーダルDOM要素） ---
