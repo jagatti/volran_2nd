@@ -4,7 +4,10 @@ import { SONGS } from './songs.js';
 const GAS_ENDPOINT = "https://script.google.com/macros/s/AKfycbz2gsX2XXdV0OOvHtPF0AsHkTBvrCQ_8_1zYxVQ0bki_CoAlFy25QbsEryqTe-dZJJu/exec";
 
 // 新しいランキング用エンドポイント（UUIDベース・別スプレッドシート）
-const GAS_ENDPOINT_V2 = "REPLACE_WITH_NEW_GAS_ENDPOINT";
+const GAS_ENDPOINT_V2 = "https://script.google.com/macros/s/AKfycby7diVlTnAnZMarRr8NVzCagjFc2h4D4g23bVgJVs_jNJBpDIUx_u8UDkAru1pMuErQ8Q/exec";
+
+// テスト環境判定（localhost で動作中のときは true）
+export const IS_TEST_ENV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
 // --- HMAC秘密鍵---
 const HMAC_SECRET = "volran-ranking-secret-2025";
