@@ -1,5 +1,6 @@
 import { SONGS } from './songs.js';
-import { fetchTopScores, submitScore, renderRankingTable, escapeHtml_, MAX_NAME_LENGTH, checkNameExists } from './ranking.js';
+import { fetchTopScores, submitScore, renderRankingTable, escapeHtml_, MAX_NAME_LENGTH, checkNameExists,
+         submitScoreV2, fetchTopScoresV2, checkNameExistsV2 } from './ranking.js';
 
 let selectedSongIdx = 0;
 let songSelectCardBounds = [];
@@ -69,6 +70,12 @@ settingsVolume       = Math.max(0, Math.min(1, settingsVolume));
 // settingsNoteSpeed は 1-10 スケール (旧30-90値は5にリセット、1未満も同様)
 settingsNoteSpeed    = (settingsNoteSpeed < 1 || settingsNoteSpeed > 10) ? 5 : settingsNoteSpeed;
 settingsTimingOffset = Math.max(-0.5, Math.min(0.5, settingsTimingOffset));
+// プレイヤーID（UUID）— 初回のみ生成
+let playerId = localStorage.getItem('player_id');
+if (!playerId) {
+  playerId = crypto.randomUUID();
+  localStorage.setItem('player_id', playerId);
+}
 // 1-10 スケールからフレーム数(30-90)に変換: 速度1→90フレーム(遅い)、速度10→30フレーム(速い)
 function speedToFrames(speed) { return Math.round(90 - (speed - 1) * (60 / 9)); }
 
@@ -310,7 +317,7 @@ rankingBtn.onclick = async () => {
     loadingEl.textContent = '接続中' + '.'.repeat(dots);
   }, 400);
   try {
-    const res = await fetchTopScores();
+    const res = await fetchTopScoresV2();
     clearInterval(loadingInterval);
     loadingEl.style.display = 'none';
     if (!res.ok) throw new Error(res.error || 'unknown');
@@ -514,6 +521,7 @@ if (!settingsModal) {
 
 settingsBtn.onclick = () => {
   const currentPlayerName = localStorage.getItem('player_name') || '';
+  const transferCode = playerId.replace(/-/g, '').slice(0, 8).toUpperCase();
   let nameChangeHtml = '';
   if (currentPlayerName) {
     nameChangeHtml = `
@@ -521,6 +529,10 @@ settingsBtn.onclick = () => {
         <span style="font-size:13px;font-weight:700;">👤 プレイヤー名の変更</span>
         <input id="settingsNameInput" type="text" maxlength="10" value="${escapeHtml_(currentPlayerName)}"
           style="width:100%;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:#0f172a;color:#fff;font-size:16px;box-sizing:border-box;">
+        <div style="font-size:11px;color:rgba(255,255,255,0.55);margin-top:4px;">
+          🔑 引き継ぎコード: <span style="font-family:monospace;letter-spacing:0.1em;">${transferCode}</span><br>
+          <span style="font-size:10px;">（再インストール時にデータを復元できます）</span>
+        </div>
         <span id="settingsNameError" style="font-size:12px;color:#f87171;display:none;min-height:16px;">既に使用されています。</span>
         <div style="display:flex;align-items:center;gap:8px;">
           <button id="settingsNameSaveBtn"
@@ -551,7 +563,7 @@ settingsBtn.onclick = () => {
           saveBtn.disabled = true;
           let taken = false;
           try {
-            taken = await checkNameExists(newName);
+            taken = await checkNameExistsV2(newName, playerId);
           } catch (_) {
             // ネットワークエラー時はチェックをスキップ
           }
@@ -620,7 +632,7 @@ function showPlayerNameModal(onSuccess) {
     errorEl.textContent = '';
     let taken = false;
     try {
-      taken = await checkNameExists(name);
+      taken = await checkNameExistsV2(name, playerId);
     } catch (_) {
       // ネットワークエラー時はチェックをスキップ
     }
@@ -1802,6 +1814,9 @@ function update(dt){
           document.body.appendChild(toast);
           setTimeout(() => { toast.remove(); }, 2500);
         }).catch(e => { console.warn('スコア送信エラー:', e); });
+        submitScoreV2(playerId, playerName, score, lastGameSeed, currentSong.id).then(res2 => {
+          if (!res2.ok) console.warn('V2スコア送信失敗:', res2.error);
+        }).catch(e => { console.warn('V2スコア送信エラー:', e); });
       }
     }
   }
