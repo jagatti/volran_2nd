@@ -1,6 +1,6 @@
 import { SONGS } from './songs.js';
-import { fetchTopScores, submitScore, renderRankingTable, escapeHtml_, MAX_NAME_LENGTH, checkNameExists,
-         submitScoreV2, fetchTopScoresV2, checkNameExistsV2, IS_TEST_ENV } from './ranking.js';
+import { renderRankingTable, escapeHtml_, MAX_NAME_LENGTH,
+         submitScoreV2, fetchTopScoresV2, checkNameExistsV2 } from './ranking.js';
 
 let selectedSongIdx = 0;
 let songSelectCardBounds = [];
@@ -70,10 +70,17 @@ settingsVolume       = Math.max(0, Math.min(1, settingsVolume));
 // settingsNoteSpeed は 1-10 スケール (旧30-90値は5にリセット、1未満も同様)
 settingsNoteSpeed    = (settingsNoteSpeed < 1 || settingsNoteSpeed > 10) ? 5 : settingsNoteSpeed;
 settingsTimingOffset = Math.max(-0.5, Math.min(0.5, settingsTimingOffset));
-// プレイヤーID（UUID）— 初回のみ生成
+// プレイヤーID（6文字短縮コード）— 初回のみ生成
+// 誤読しやすい O/0/I/1 を除いた32文字セットから生成
+function _generateShortId() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const arr = new Uint8Array(6);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, b => chars[b % chars.length]).join('');
+}
 let playerId = localStorage.getItem('player_id');
 if (!playerId) {
-  playerId = crypto.randomUUID();
+  playerId = _generateShortId();
   localStorage.setItem('player_id', playerId);
 }
 // 1-10 スケールからフレーム数(30-90)に変換: 速度1→90フレーム(遅い)、速度10→30フレーム(速い)
@@ -528,7 +535,6 @@ if (!settingsModal) {
 
 settingsBtn.onclick = () => {
   const currentPlayerName = localStorage.getItem('player_name') || '';
-  const transferCode = playerId.replace(/-/g, '').slice(0, 8).toUpperCase();
   let nameChangeHtml = '';
   if (currentPlayerName) {
     nameChangeHtml = `
@@ -536,10 +542,6 @@ settingsBtn.onclick = () => {
         <span style="font-size:13px;font-weight:700;">👤 プレイヤー名の変更</span>
         <input id="settingsNameInput" type="text" maxlength="10" value="${escapeHtml_(currentPlayerName)}"
           style="width:100%;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:#0f172a;color:#fff;font-size:16px;box-sizing:border-box;">
-        <div style="font-size:11px;color:rgba(255,255,255,0.55);margin-top:4px;">
-          🔑 引き継ぎコード: <span style="font-family:monospace;letter-spacing:0.1em;">${transferCode}</span><br>
-          <span style="font-size:10px;">（再インストール時にデータを復元できます）</span>
-        </div>
         <span id="settingsNameError" style="font-size:12px;color:#f87171;display:none;min-height:16px;">既に使用されています。</span>
         <div style="display:flex;align-items:center;gap:8px;">
           <button id="settingsNameSaveBtn"
@@ -548,10 +550,27 @@ settingsBtn.onclick = () => {
         </div>
       </div>`;
   }
+  const transferSection = `
+    <div style="display:flex;flex-direction:column;gap:6px;border-top:1px solid rgba(255,255,255,0.15);padding-top:12px;margin-top:4px;">
+      <span style="font-size:13px;font-weight:700;">🔑 引き継ぎコード</span>
+      <div style="font-size:18px;color:#fff;font-family:monospace;letter-spacing:0.2em;font-weight:700;">${escapeHtml_(playerId)}</div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.45);">上の6文字をメモしておくと、別の端末や再インストール時にデータを復元できます</div>
+      <input id="settingsRestoreInput" type="text" placeholder="他の端末の6文字コードを入力"
+        maxlength="6"
+        style="width:100%;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.3);background:#0f172a;color:#fff;font-size:14px;box-sizing:border-box;font-family:monospace;text-transform:uppercase;letter-spacing:0.2em;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button id="settingsRestoreBtn"
+          style="padding:6px 14px;background:#0f766e;color:#fff;border:none;border-radius:7px;cursor:pointer;font-size:12px;">この端末に復元</button>
+        <span id="settingsRestoreMsg" style="font-size:11px;color:#86efac;display:none;">復元しました。再読み込みします…</span>
+        <span id="settingsRestoreError" style="font-size:11px;color:#f87171;display:none;">コードが無効です</span>
+      </div>
+    </div>`;
   const settingsBody = settingsModal.querySelector('div[style*="flex-direction:column;gap:12px"]');
   if (settingsBody) {
     const existing = settingsModal.querySelector('#settingsNameSection');
     if (existing) existing.remove();
+    const existingTransfer = settingsModal.querySelector('#settingsTransferSection');
+    if (existingTransfer) existingTransfer.remove();
     if (currentPlayerName) {
       const section = document.createElement('div');
       section.id = 'settingsNameSection';
@@ -585,6 +604,33 @@ settingsBtn.onclick = () => {
         setTimeout(() => { nameMsg.style.display = 'none'; }, 1000);
       };
     }
+    const transferEl = document.createElement('div');
+    transferEl.id = 'settingsTransferSection';
+    transferEl.innerHTML = transferSection;
+    settingsBody.appendChild(transferEl);
+    const restoreBtn = transferEl.querySelector('#settingsRestoreBtn');
+    const restoreInput = transferEl.querySelector('#settingsRestoreInput');
+    const restoreMsg = transferEl.querySelector('#settingsRestoreMsg');
+    const restoreError = transferEl.querySelector('#settingsRestoreError');
+    restoreBtn.onclick = () => {
+      const code = restoreInput.value.trim().toUpperCase();
+      restoreError.style.display = 'none';
+      restoreMsg.style.display = 'none';
+      // 6文字英数字（新形式）または UUID（旧形式）を受け付ける
+      const isShort = /^[A-Z0-9]{6}$/i.test(code);
+      const cleanedHex = code.replace(/-/g, '').toLowerCase();
+      const isUUID = /^[0-9a-f]{32}$/.test(cleanedHex);
+      if (!isShort && !isUUID) {
+        restoreError.style.display = 'inline';
+        return;
+      }
+      const restored = isShort
+        ? code.toUpperCase()
+        : `${cleanedHex.slice(0,8)}-${cleanedHex.slice(8,12)}-${cleanedHex.slice(12,16)}-${cleanedHex.slice(16,20)}-${cleanedHex.slice(20)}`;
+      restoreMsg.style.display = 'inline';
+      localStorage.setItem('player_id', restored);
+      setTimeout(() => { location.reload(); }, 1500);
+    };
   }
   settingsModal.style.display = 'block';
 };
@@ -1813,19 +1859,10 @@ function update(dt){
       localStorage.setItem('bestScore_' + currentSong.id, bestScore);
       const playerName = localStorage.getItem('player_name');
       if (playerName) {
-        if (IS_TEST_ENV) {
-          // テスト環境（localhost）: V2のみ送信（本番V1ランキングを汚染しない）
-          submitScoreV2(playerId, playerName, score, lastGameSeed, currentSong.id).then(res2 => {
-            if (!res2.ok) { console.warn('V2スコア送信失敗:', res2.error); return; }
-            showBestScoreToast();
-          }).catch(e => { console.warn('V2スコア送信エラー:', e); });
-        } else {
-          // 本番環境: V1のみ送信
-          submitScore(playerName, score, lastGameSeed, currentSong.id).then(res => {
-            if (!res.ok) { console.warn('スコア送信失敗:', res.error); return; }
-            showBestScoreToast();
-          }).catch(e => { console.warn('スコア送信エラー:', e); });
-        }
+        // V2のみ送信（V1本番スプレッドには一切送らない）
+        submitScoreV2(playerId, playerName, score, lastGameSeed, currentSong.id)
+          .then(res2 => { if (res2.ok) showBestScoreToast(); else console.warn('V2スコア送信失敗:', res2.error); })
+          .catch(e => { console.warn('V2スコア送信エラー:', e); });
       }
     }
   }
