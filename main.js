@@ -843,6 +843,32 @@ function getStaminaScoreMult() {
   return 0.0;
 }
 
+// --- ボルテージランク（スクスタ風 C/B/A/S） ---
+// songs.js で rankThresholds: {C, B, A, S} を指定すると上書き可能
+const RANK_ORDER = ["C", "B", "A", "S"];
+const RANK_COLORS = { C: "#9ca3af", B: "#60a5fa", A: "#f472b6", S: "#ffd700" };
+function getRankThresholds(song) {
+  if (song.rankThresholds) return song.rankThresholds;
+  const acReward = song.acList.reduce((sum, ac) => sum + (ac.rewardScore || 0), 0);
+  const s = song.notesChart.length * 40000 + acReward;
+  return { C: Math.floor(s * 0.25), B: Math.floor(s * 0.5), A: Math.floor(s * 0.75), S: s };
+}
+function getVoltageRank(value, song) {
+  const th = getRankThresholds(song);
+  let rank = null;
+  for (const r of RANK_ORDER) if (value >= th[r]) rank = r;
+  return rank;
+}
+
+let liveFailed = false;
+function fadeOutBgm() {
+  let fadeOut = setInterval(() => {
+    const curVol = bgmGain ? bgmGain.gain.value : bgm.volume;
+    if (curVol > 0.02) { applyVolume(curVol - 0.02); }
+    else { bgm.pause(); bgm.currentTime = 0; clearInterval(fadeOut); applyVolume(settingsVolume); }
+  }, 50);
+}
+
 function applyACFailDamage() {
   stamina = Math.max(0, stamina - 25000);
 }
@@ -1704,6 +1730,7 @@ async function startGame(seed) {
   strategyChangeCooldown = 0;
   notesProcessedSinceSwitch = 0;
   isPaused = false;
+  liveFailed = false;
 
   // --- 永続バフ初期化&50%で発動処理 ---
   permanentScoreBuff = 0;
@@ -1767,6 +1794,7 @@ retryBtn.onclick = ()=>{
   currentStrategy = "red";
   strategyChangeCooldown = 0;
   notesProcessedSinceSwitch = 0;
+  liveFailed = false;
   currentSong.acList.forEach(ac=>{
     ac.state = "waiting";
     ac.progress = 0;
@@ -1833,6 +1861,15 @@ function update(dt){
   }
   for(const n of notes) n.t += dt;
   const keep=[];for(const n of notes){if(n.t<=n.duration+MISS_WINDOW) keep.push(n);else applyMiss('MISS');}notes=keep;
+  // --- スタミナ0でライブ失敗（スクスタ準拠） ---
+  if(gameState==="playing" && stamina<=0 && !liveFailed){
+    liveFailed = true;
+    notes = [];
+    gameState="clear";
+    clearStartFrame=frame;
+    waitingClearFrame = null;
+    fadeOutBgm();
+  }
   if(gameState==="playing" && chartIndex>=currentSong.notesChart.length && notes.length===0){
     if(waitingClearFrame === null){
       waitingClearFrame = frame;
@@ -1841,11 +1878,7 @@ function update(dt){
       gameState="clear";
       clearStartFrame=frame;
       waitingClearFrame = null;
-      let fadeOut = setInterval(() => {
-        const curVol = bgmGain ? bgmGain.gain.value : bgm.volume;
-        if (curVol > 0.02) { applyVolume(curVol - 0.02); }
-        else { bgm.pause(); bgm.currentTime = 0; clearInterval(fadeOut); applyVolume(settingsVolume); }
-      }, 50);
+      fadeOutBgm();
     }
   } else {
     waitingClearFrame = null;
@@ -1854,7 +1887,7 @@ function update(dt){
     gameState="result";
     resultStartFrame=frame;
     resizeCanvas();
-    if(score > bestScore) {
+    if(!liveFailed && score > bestScore) {
       bestScore = score;
       localStorage.setItem('bestScore_' + currentSong.id, bestScore);
       const playerName = localStorage.getItem('player_name');
@@ -2514,7 +2547,29 @@ function drawACFailFlash(){
 
   ctx.restore();
 } 
-// 判定回数リザルト左下表示
+// 判定回数リザルト左下表示// --- リザルト：ランク / ライブ成功・失敗表示 ---
+function drawResultRank() {
+  const rank = liveFailed ? null : getVoltageRank(score, currentSong);
+  const size = Math.round(cvs.height * 0.22);
+  const x = cvs.width - Math.round(cvs.width * 0.14);
+  const y = Math.round(cvs.height * 0.5);
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.font = `bold ${Math.round(size * 0.18)}px system-ui`;
+  ctx.fillStyle = liveFailed ? '#f87171' : '#4ade80';
+  ctx.fillText(liveFailed ? 'ライブ失敗' : 'ライブ成功', x, y - size * 0.85);
+  ctx.font = `bold ${size}px system-ui`;
+  ctx.lineWidth = 8; ctx.strokeStyle = '#000';
+  const txt = rank || '-';
+  ctx.strokeText(txt, x, y + size * 0.3);
+  ctx.fillStyle = rank ? RANK_COLORS[rank] : '#6b7280';
+  ctx.fillText(txt, x, y + size * 0.3);
+  ctx.font = `bold ${Math.round(size * 0.14)}px system-ui`;
+  ctx.fillStyle = '#fff';
+  ctx.fillText('VOLTAGE RANK', x, y + size * 0.55);
+  ctx.restore();
+}
+
 function drawJudgeCountsResult() {
   const baseX = 30;
   const baseY = cvs.height - 28;
@@ -2880,6 +2935,43 @@ function drawSongSelectScreen() {
     ctx.restore();
   }
 }
+// --- ボルテージゲージ（スクスタ風 C/B/A/S 目標） ---
+function drawVoltageGauge(){
+  if(gameState!=="playing") return;
+  const th = getRankThresholds(currentSong);
+  const barMarginRight = 200;
+  const right = Math.max(160, cvs.width - barMarginRight);
+  const x = Math.max(Math.round(cvs.width * 0.32), right - 420);
+  const w = right - x;
+  const y = 28, h = 8;
+  const ratio = Math.min(1, score / th.S);
+  const rank = getVoltageRank(score, currentSong);
+  ctx.save();
+  ctx.fillStyle = 'rgba(17,24,39,0.85)';
+  ctx.fillRect(x, y, w, h);
+  const grad = ctx.createLinearGradient(x, 0, x + w, 0);
+  grad.addColorStop(0, '#f97316');
+  grad.addColorStop(1, '#ffd700');
+  ctx.fillStyle = grad;
+  ctx.fillRect(x, y, w * ratio, h);
+  ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x, y, w, h);
+  ctx.font = 'bold 11px system-ui';
+  ctx.textAlign = 'center';
+  for(const r of RANK_ORDER){
+    const mx = x + w * Math.min(1, th[r] / th.S);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(mx - 1, y - 2, 2, h + 4);
+    ctx.fillStyle = score >= th[r] ? RANK_COLORS[r] : 'rgba(255,255,255,0.55)';
+    ctx.fillText(r, Math.min(mx, x + w - 4), y + h + 13);
+  }
+  ctx.textAlign = 'right';
+  ctx.font = 'bold 13px system-ui';
+  ctx.fillStyle = rank ? RANK_COLORS[rank] : 'rgba(255,255,255,0.6)';
+  ctx.fillText(rank ? `RANK ${rank}` : 'RANK -', x - 8, y + h);
+  ctx.restore();
+}
 
 function render(){
    ctx.clearRect(0,0,cvs.width,cvs.height);
@@ -2960,6 +3052,7 @@ function render(){
   if(gameState!=="countdown" && gameState!=="playing" && gameState!=="clear" && gameState!=="result") return;
 
   drawProgressBarWithAC();
+  drawVoltageGauge();
   drawTargets();
   drawNotes();
   drawHitRings();
@@ -2988,8 +3081,9 @@ function render(){
   if(gameState==="clear"){
     ctx.textAlign='center';
     ctx.font=`bold ${Math.round(cvs.height*0.14)}px system-ui`;
-    ctx.lineWidth=10; ctx.strokeStyle='#fff'; ctx.strokeText('CLEAR', cvs.width/2, cvs.height/2);
-    ctx.fillStyle='#ffa500'; ctx.fillText('CLEAR', cvs.width/2, cvs.height/2);
+    const clearText = liveFailed ? 'LIVE FAILED' : 'CLEAR';
+    ctx.lineWidth=10; ctx.strokeStyle='#fff'; ctx.strokeText(clearText, cvs.width/2, cvs.height/2);
+    ctx.fillStyle = liveFailed ? '#6b7280' : '#ffa500'; ctx.fillText(clearText, cvs.width/2, cvs.height/2);
     return;
   }
 
@@ -3088,6 +3182,7 @@ function render(){
     ctx.fillText(`SP使用回数: ${spUseCount}`, 0, rowH*2.45, safeW); clearShadow();
 
     ctx.restore();
+    drawResultRank();
     drawJudgeCountsResult();
     return;
   } else {
